@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from api.routes import router
 
 app = FastAPI(
     title="McAlister Atlas API",
@@ -6,13 +7,4 @@ app = FastAPI(
     version="0.1.0",
 )
 
-
-@app.get("/")
-def root():
-    return {"message": "McAlister Atlas API"}
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
-
+app.include_router(router)
