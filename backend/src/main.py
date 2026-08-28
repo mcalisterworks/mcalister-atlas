@@ -8,3 +8,6 @@ app = FastAPI(
 )
 
 app.include_router(router)
+
+@app.get("/") 
+async def root(): return { "name": "McAlister Atlas API", "status": "online", }

@@ -1,38 +1,37 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
 
-router = APIRouter()
-
-
-@router.get("/")
-def root():
-    return {"message": "McAlister Atlas API"}
+from .services.elevation import get_elevation
 
 
-@router.get("/health")
-def health_check():
-    return {"status": "healthy"}
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["geospatial"],
+)
 
 
-@router.get("/api/v1/properties")
-def get_properties():
+@router.get("/elevation")
+async def elevation(
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+):
+    """
+    Return USGS 3DEP elevation for a latitude/longitude.
+    """
+
+    try:
+        elevation_m = await get_elevation(
+            latitude=latitude,
+            longitude=longitude,
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"USGS elevation service error: {exc}",
+        )
+
     return {
-        "properties": [
-            {
-                "id": "demo-001",
-                "name": "Demo Property",
-                "latitude": 45.123,
-                "longitude": -85.456,
-            }
-        ]
+        "latitude": latitude,
+        "longitude": longitude,
+        "elevation_m": elevation_m,
     }
-
-
-@router.get("/api/v1/properties/{property_id}")
-def get_property(property_id: str):
-    return {
-        "id": property_id,
-        "name": "Demo Property",
-        "latitude": 45.123,
-        "longitude": -85.456,
-    }
-
