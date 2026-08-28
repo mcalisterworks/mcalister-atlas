@@ -3,6 +3,7 @@ import {
   Viewer,
   ImageryLayer,
   ArcGisMapServerImageryProvider,
+  ArcGISTiledElevationTerrainProvider,
   Rectangle,
 } from 'cesium'
 
@@ -16,15 +17,42 @@ function App() {
     let viewer
 
     async function initializeCesium() {
+      // --------------------------------------------------
+      // USGS Imagery
+      // --------------------------------------------------
+
       const imageryProvider =
         await ArcGisMapServerImageryProvider.fromUrl(
-          'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer'
+          'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer',
+          {
+            maximumLevel: 17,
+            rectangle: Rectangle.fromDegrees(
+              -90,
+              41,
+              -82,
+              49
+            ),
+          }
         )
 
       const imageryLayer = new ImageryLayer(imageryProvider)
 
+      // --------------------------------------------------
+      // USGS 3DEP Terrain
+      // --------------------------------------------------
+
+      // const terrainProvider =
+      //   await ArcGISTiledElevationTerrainProvider.fromUrl(
+      //     'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer'
+      //   )
+
+      // --------------------------------------------------
+      // Cesium Viewer
+      // --------------------------------------------------
+
       viewer = new Viewer(cesiumContainer.current, {
         baseLayer: imageryLayer,
+        //terrainProvider: terrainProvider,
 
         baseLayerPicker: false,
         animation: false,
@@ -35,12 +63,13 @@ function App() {
         navigationHelpButton: false,
       })
 
+      // Northern Michigan
       viewer.camera.setView({
         destination: Rectangle.fromDegrees(
-          -95.0,
-          25.0,
-          -80.0,
-          50.0
+          -87.5,
+          44.0,
+          -82.5,
+          47.0
         ),
       })
     }
