@@ -1,26 +1,16 @@
 [project]
-name = "backend"
+name = "mcalister-atlas-backend"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-authors = [
-    { name = "John McAlister", email = "321979858+mcalisterworks@users.noreply.github.com" }
-]
+description = "Backend and data ingestion for the McAlister Atlas real estate analysis project"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.141.1",
-    "httpx>=0.28.1",
+    "beautifulsoup4>=4.15.0",
+    "geopandas>=1.1.4",
     "pandas>=3.0.5",
-    "polars>=1.44.1",
     "psycopg>=3.3.4",
-    "pydantic-settings>=2.15.0",
+    "requests>=2.34.2",
     "sqlalchemy>=2.0.52",
-    "uvicorn[standard]>=0.52.4",
 ]
 
-[project.scripts]
-backend = "backend:main"
-
-[build-system]
-requires = ["uv_build>=0.12.7,<0.13.0"]
-build-backend = "uv_build"
+[tool.uv]
+package = false
