@@ -1,4 +1,6 @@
-from getpass import getpass
+import os
+
+from dotenv import load_dotenv
 
 import psycopg
 import requests
@@ -8,11 +10,18 @@ from psycopg.types.json import Json
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+load_dotenv()
 
-DATABASE_HOST = "localhost"
-DATABASE_PORT = 5432
-DATABASE_NAME = "northern_mi_real_estate"
-DATABASE_USER = "postgres"
+DATABASE_HOST = os.getenv("POSTGRES_HOST", "localhost")
+DATABASE_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+DATABASE_NAME = os.getenv("POSTGRES_DB", "mcalister_atlas")
+DATABASE_USER = os.getenv("POSTGRES_USER", "postgres")
+DATABASE_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+
+if not DATABASE_PASSWORD:
+    raise RuntimeError(
+        "POSTGRES_PASSWORD is not set. Check your .env file."
+    )
 
 SOURCE = "Grand Traverse County Tax Parcel GIS"
 
@@ -251,8 +260,6 @@ def insert_parcel(cur, feature):
 
 def main():
 
-    password = getpass("PostgreSQL password: ")
-
     features = fetch_parcels()
 
     with psycopg.connect(
@@ -260,7 +267,7 @@ def main():
         port=DATABASE_PORT,
         dbname=DATABASE_NAME,
         user=DATABASE_USER,
-        password=password,
+        password=DATABASE_PASSWORD,
     ) as conn:
 
         with conn.cursor() as cur:
