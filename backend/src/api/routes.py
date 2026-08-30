@@ -1,37 +1,59 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from .services.elevation import get_elevation
+from services.parcels import get_parcel, get_parcels_by_bbox
 
 
-router = APIRouter(
-    prefix="/api/v1",
-    tags=["geospatial"],
-)
+router = APIRouter()
 
 
-@router.get("/elevation")
-async def elevation(
-    latitude: float = Query(..., ge=-90, le=90),
-    longitude: float = Query(..., ge=-180, le=180),
+@router.get("/api/parcels")
+def parcels(
+    bbox: str = Query(
+        ...,
+        description="Bounding box as min_lon,min_lat,max_lon,max_lat",
+    )
 ):
     """
-    Return USGS 3DEP elevation for a latitude/longitude.
+    Return parcels within a bounding box as GeoJSON.
     """
 
     try:
-        elevation_m = await get_elevation(
-            latitude=latitude,
-            longitude=longitude,
-        )
+        values = [float(value.strip()) for value in bbox.split(",")]
 
-    except Exception as exc:
+        if len(values) != 4:
+            raise ValueError
+
+        min_lon, min_lat, max_lon, max_lat = values
+
+        if min_lon >= max_lon or min_lat >= max_lat:
+            raise ValueError
+
+    except ValueError:
         raise HTTPException(
-            status_code=502,
-            detail=f"USGS elevation service error: {exc}",
+            status_code=400,
+            detail="bbox must be min_lon,min_lat,max_lon,max_lat",
         )
 
-    return {
-        "latitude": latitude,
-        "longitude": longitude,
-        "elevation_m": elevation_m,
-    }
+    return get_parcels_by_bbox(
+        min_lon,
+        min_lat,
+        max_lon,
+        max_lat,
+    )
+
+
+@router.get("/api/parcels/{parcel_id}")
+def parcel(parcel_id: str):
+    """
+    Return a single parcel as GeoJSON.
+    """
+
+    result = get_parcel(parcel_id)
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Parcel {parcel_id} not found",
+        )
+
+    return result

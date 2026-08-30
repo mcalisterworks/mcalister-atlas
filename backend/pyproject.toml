@@ -5,12 +5,14 @@ description = "Backend and data ingestion for the McAlister Atlas real estate an
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    "fastapi>=0.141.1",
     "geopandas>=1.1.4",
     "pandas>=3.0.5",
     "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
     "sqlalchemy>=2.0.52",
+    "uvicorn>=0.52.4",
 ]
 
 [tool.uv]
