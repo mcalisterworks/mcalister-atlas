@@ -1,15 +1,14 @@
 import os
-
-from dotenv import load_dotenv
-
+import json
 import psycopg
 import requests
-from psycopg.types.json import Json
+from dotenv import load_dotenv
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 load_dotenv()
 
 DATABASE_HOST = os.getenv("POSTGRES_HOST", "localhost")
@@ -23,7 +22,6 @@ if not DATABASE_PASSWORD:
         "POSTGRES_PASSWORD is not set. Check your .env file."
     )
 
-SOURCE = "Grand Traverse County Tax Parcel GIS"
 
 SOURCE_URL = (
     "https://gis.gtcountymi.gov/"
@@ -31,227 +29,302 @@ SOURCE_URL = (
     "Tax_Parcel_Public/MapServer/0"
 )
 
-# Keep this small while developing.
-# We will add pagination later.
-RESULT_RECORD_COUNT = 10
+SOURCE_NAME = "grand_traverse_tax_parcel_public"
+
+# ---------------------------------------------------------------------------
+# Testing:
+#   10   = small test batches
+#   1000 = full ArcGIS batch size
+# ---------------------------------------------------------------------------
+
+BATCH_SIZE = 1000
 
 
 # ---------------------------------------------------------------------------
 # ArcGIS
 # ---------------------------------------------------------------------------
 
-def fetch_parcels():
-    """Fetch parcel records from the Grand Traverse County GIS service."""
+def fetch_parcel_batches():
+    """
+    Fetch Grand Traverse County parcels from ArcGIS in batches.
 
-    params = {
-        "where": "1=1",
-        "outFields": "*",
-        "returnGeometry": "true",
-        "outSR": 4326,
-        "f": "geojson",
-        "resultRecordCount": RESULT_RECORD_COUNT,
-    }
+    The ArcGIS service supports pagination and has a maximum
+    record count of 1,000 per request.
+    """
 
-    print("Fetching Grand Traverse County parcels...")
+    offset = 0
 
-    response = requests.get(
-        SOURCE_URL + "/query",
-        params=params,
-        timeout=60,
-    )
+    while True:
 
-    response.raise_for_status()
+        params = {
+            "where": "1=1",
+            "outFields": "*",
+            "returnGeometry": "true",
+            "outSR": 4326,
+            "f": "geojson",
+            "resultOffset": offset,
+            "resultRecordCount": BATCH_SIZE,
+            "orderByFields": "OBJECTID ASC",
+        }
 
-    data = response.json()
+        print(
+            f"Fetching records "
+            f"{offset + 1:,}-{offset + BATCH_SIZE:,}..."
+        )
 
-    if "error" in data:
-        raise RuntimeError(data["error"])
+        response = requests.get(
+            SOURCE_URL + "/query",
+            params=params,
+            timeout=120,
+        )
 
-    features = data.get("features", [])
+        response.raise_for_status()
 
-    print(f"Features returned: {len(features)}")
+        data = response.json()
 
-    return features
+        if "error" in data:
+            raise RuntimeError(data["error"])
+
+        features = data.get("features", [])
+
+        print(f"  Received: {len(features):,}")
+
+        if not features:
+            break
+
+        yield features
+
+        if len(features) < BATCH_SIZE:
+            break
+
+        offset += BATCH_SIZE
 
 
 # ---------------------------------------------------------------------------
-# Database
+# Helpers
+# ---------------------------------------------------------------------------
+
+def get_property(properties, field):
+    """Safely retrieve an ArcGIS property."""
+    return properties.get(field)
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL / PostGIS
 # ---------------------------------------------------------------------------
 
 def insert_parcel(cur, feature):
-    """Insert one ArcGIS parcel feature into the raw table."""
+    """
+    Insert one ArcGIS parcel feature into the raw schema.
 
-    p = feature["properties"]
-    geometry = feature.get("geometry")
+    Returns:
+        True  = row inserted
+        False = row skipped because it already exists
+    """
 
-    parcel_id = p.get("PARCELID")
+    properties = feature["properties"]
+    geometry = json.dumps(feature.get("geometry"))
 
-    if not parcel_id:
-        raise ValueError("Feature is missing PARCELID")
+    # -----------------------------------------------------------------------
+    # Parcel fields
+    # -----------------------------------------------------------------------
 
-    cur.execute(
-        """
+    columns = [
+        "objectid",
+        "parcelid",
+        "lowparcelid",
+        "siteaddress",
+        "sitectstzp",
+        "ownernme1",
+        "ownernme2",
+        "pstladdress",
+        "pstlcity",
+        "pstlstate",
+        "pstlzip5",
+        "pstlzip4",
+        "building",
+        "unit",
+        "cvttxdscrp",
+        "cvttxcd",
+        "schldscrp",
+        "schltxcd",
+        "pre",
+        "statedarea",
+        "assacres",
+        "usecd",
+        "usedscrp",
+        "nghbrhdcd",
+        "classcd",
+        "classdscrp",
+        "cnvyname",
+        "floorcount",
+        "bldgarea",
+        "resflrarea",
+        "resyrblt",
+        "resstrtyp",
+        "strclass",
+        "classmod",
+        "lndvalue",
+        "impvalue",
+        "prvassdval",
+        "cntassdval",
+        "assdvalyrcg",
+        "assdpcntcg",
+        "prvtxblval",
+        "cnttxblval",
+        "txblvalyrchg",
+        "txblpcntchg",
+        "prvwnttxod",
+        "prvsmrtxod",
+        "totprvtxtod",
+        "cntwnttxod",
+        "cntsmrtxod",
+        "totcnttxod",
+        "txodyrchg",
+        "txodpcntchg",
+        "waterserv",
+        "sewerserv",
+        "primezone",
+        "prprtydscrp",
+        "lglstartdt",
+        "lastupdate",
+        "lasteditor",
+        "fulpstladdress",
+        "globalid",
+        "pnum",
+    ]
+
+    # ArcGIS field names corresponding to the PostgreSQL columns above.
+    source_fields = [
+        "OBJECTID",
+        "PARCELID",
+        "LOWPARCELID",
+        "SITEADDRESS",
+        "SITECTSTZP",
+        "OWNERNME1",
+        "OWNERNME2",
+        "PSTLADDRESS",
+        "PSTLCITY",
+        "PSTLSTATE",
+        "PSTLZIP5",
+        "PSTLZIP4",
+        "BUILDING",
+        "UNIT",
+        "CVTTXDSCRP",
+        "CVTTXCD",
+        "SCHLDSCRP",
+        "SCHLTXCD",
+        "PRE",
+        "STATEDAREA",
+        "ASSACRES",
+        "USECD",
+        "USEDSCRP",
+        "NGHBRHDCD",
+        "CLASSCD",
+        "CLASSDSCRP",
+        "CNVYNAME",
+        "FLOORCOUNT",
+        "BLDGAREA",
+        "RESFLRAREA",
+        "RESYRBLT",
+        "RESSTRTYP",
+        "STRCLASS",
+        "CLASSMOD",
+        "LNDVALUE",
+        "IMPVALUE",
+        "PRVASSDVAL",
+        "CNTASSDVAL",
+        "ASSDVALYRCG",
+        "ASSDPCNTCG",
+        "PRVTXBLVAL",
+        "CNTTXBLVAL",
+        "TXBLVALYRCHG",
+        "TXBLPCNTCHG",
+        "PRVWNTTXOD",
+        "PRVSMRTXOD",
+        "TOTPRVTXTOD",
+        "CNTWNTTXOD",
+        "CNTSMRTXOD",
+        "TOTCNTTXOD",
+        "TXODYRCHG",
+        "TXODPCNTCHG",
+        "WATERSERV",
+        "SEWERSERV",
+        "PRIMEZONE",
+        "PRPRTYDSCRP",
+        "LGLSTARTDT",
+        "LASTUPDATE",
+        "LASTEDITOR",
+        "FULPSTLADDRESS",
+        "GlobalID",
+        "pnum",
+    ]
+
+    values = [
+        get_property(properties, field)
+        for field in source_fields
+    ]
+
+    # -----------------------------------------------------------------------
+    # Add geometry and provenance fields
+    # -----------------------------------------------------------------------
+
+    columns.extend(
+        [
+            "geom",
+            "source",
+            "source_url",
+            "source_record_id",
+        ]
+    )
+
+    values.extend(
+        [
+            geometry,
+            SOURCE_NAME,
+            SOURCE_URL,
+            str(get_property(properties, "OBJECTID")),
+        ]
+    )
+
+    # -----------------------------------------------------------------------
+    # Build placeholders dynamically
+    #
+    # Geometry gets a special PostGIS expression instead of a plain %s.
+    # -----------------------------------------------------------------------
+
+    placeholders = ["%s"] * len(values)
+
+    geometry_index = len(source_fields)
+
+    placeholders[geometry_index] = """
+        ST_SetSRID(
+            ST_GeomFromGeoJSON(%s),
+            4326
+        )
+    """
+
+    # -----------------------------------------------------------------------
+    # Build INSERT statement
+    # -----------------------------------------------------------------------
+
+    column_sql = ",\n            ".join(columns)
+    placeholder_sql = ",\n            ".join(placeholders)
+
+    sql = f"""
         INSERT INTO raw.grand_traverse_parcels (
-            objectid,
-            parcelid,
-            lowparcelid,
-            siteaddress,
-            sitectstzp,
-            ownernme1,
-            ownernme2,
-            pstladdress,
-            pstlcity,
-            pstlstate,
-            pstlzip5,
-            pstlzip4,
-            building,
-            unit,
-            cvttxdscrp,
-            cvttxcd,
-            schldscrp,
-            schltxcd,
-            pre,
-            statedarea,
-            assacres,
-            usecd,
-            usedscrp,
-            nghbrhdcd,
-            classcd,
-            classdscrp,
-            cnvyname,
-            floorcount,
-            bldgarea,
-            resflrarea,
-            resyrblt,
-            resstrtyp,
-            strclass,
-            classmod,
-            lndvalue,
-            impvalue,
-            prvassdval,
-            cntassdval,
-            assdvalyrcg,
-            assdpcntcg,
-            prvtxblval,
-            cnttxblval,
-            txblvalyrchg,
-            txblpcntchg,
-            prvwnttxod,
-            prvsmrtxod,
-            totprvtxtod,
-            cntwnttxod,
-            cntsmrtxod,
-            totcnttxod,
-            txodyrchg,
-            txodpcntchg,
-            waterserv,
-            sewerserv,
-            primezone,
-            prprtydscrp,
-            lglstartdt,
-            lastupdate,
-            lasteditor,
-            fulpstladdress,
-            globalid,
-            pnum,
-
-            source,
-            source_url,
-            source_record_id,
-
-            geom
+            {column_sql}
         )
         VALUES (
-            %(OBJECTID)s,
-            %(PARCELID)s,
-            %(LOWPARCELID)s,
-            %(SITEADDRESS)s,
-            %(SITECTSTZP)s,
-            %(OWNERNME1)s,
-            %(OWNERNME2)s,
-            %(PSTLADDRESS)s,
-            %(PSTLCITY)s,
-            %(PSTLSTATE)s,
-            %(PSTLZIP5)s,
-            %(PSTLZIP4)s,
-            %(BUILDING)s,
-            %(UNIT)s,
-            %(CVTTXDSCRP)s,
-            %(CVTTXCD)s,
-            %(SCHLDSCRP)s,
-            %(SCHLTXCD)s,
-            %(PRE)s,
-            %(STATEDAREA)s,
-            %(ASSACRES)s,
-            %(USECD)s,
-            %(USEDSCRP)s,
-            %(NGHBRHDCD)s,
-            %(CLASSCD)s,
-            %(CLASSDSCRP)s,
-            %(CNVYNAME)s,
-            %(FLOORCOUNT)s,
-            %(BLDGAREA)s,
-            %(RESFLRAREA)s,
-            %(RESYRBLT)s,
-            %(RESSTRTYP)s,
-            %(STRCLASS)s,
-            %(CLASSMOD)s,
-            %(LNDVALUE)s,
-            %(IMPVALUE)s,
-            %(PRVASSDVAL)s,
-            %(CNTASSDVAL)s,
-            %(ASSDVALYRCG)s,
-            %(ASSDPCNTCG)s,
-            %(PRVTXBLVAL)s,
-            %(CNTTXBLVAL)s,
-            %(TXBLVALYRCHG)s,
-            %(TXBLPCNTCHG)s,
-            %(PRVWNTTXOD)s,
-            %(PRVSMRTXOD)s,
-            %(TOTPRVTXTOD)s,
-            %(CNTWNTTXOD)s,
-            %(CNTSMRTXOD)s,
-            %(TOTCNTTXOD)s,
-            %(TXODYRCHG)s,
-            %(TXODPCNTCHG)s,
-            %(WATERSERV)s,
-            %(SEWERSERV)s,
-            %(PRIMEZONE)s,
-            %(PRPRTYDSCRP)s,
-            %(LGLSTARTDT)s,
-            %(LASTUPDATE)s,
-            %(LASTEDITOR)s,
-            %(FULPSTLADDRESS)s,
-            %(GlobalID)s,
-            %(pnum)s,
-
-            %(source)s,
-            %(source_url)s,
-            %(source_record_id)s,
-
-            ST_SetSRID(
-                ST_Multi(
-                    ST_GeomFromGeoJSON(%(geometry)s)
-                ),
-                4326
-            )
+            {placeholder_sql}
         )
         ON CONFLICT (source, source_record_id)
         DO NOTHING
-        """,
-        {
-            **p,
-            "source": SOURCE,
-            "source_url": SOURCE_URL,
-            "source_record_id": parcel_id,
-            "geometry": Json(geometry),
-        },
-    )
+    """
 
-    if cur.rowcount == 1:
-        print(f"Inserted: {parcel_id}")
-    else:
-        print(f"Skipped (already exists): {parcel_id}")
+    cur.execute(sql, values)
+
+    return cur.rowcount == 1
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +333,14 @@ def insert_parcel(cur, feature):
 
 def main():
 
-    features = fetch_parcels()
+    total_inserted = 0
+    total_skipped = 0
+    batch_number = 0
+
+    print("Starting Grand Traverse County parcel ingestion...")
+    print(f"Source: {SOURCE_URL}")
+    print(f"Batch size: {BATCH_SIZE}")
+    print()
 
     with psycopg.connect(
         host=DATABASE_HOST,
@@ -272,11 +352,42 @@ def main():
 
         with conn.cursor() as cur:
 
-            for feature in features:
-                insert_parcel(cur, feature)
+            for features in fetch_parcel_batches():
 
-    print()
+                batch_number += 1
+
+                batch_inserted = 0
+                batch_skipped = 0
+
+                for feature in features:
+
+                    if insert_parcel(cur, feature):
+                        batch_inserted += 1
+                    else:
+                        batch_skipped += 1
+
+                conn.commit()
+
+                total_inserted += batch_inserted
+                total_skipped += batch_skipped
+
+                print(
+                    f"Batch {batch_number}: "
+                    f"{batch_inserted:,} inserted, "
+                    f"{batch_skipped:,} skipped"
+                )
+
+                print(
+                    f"Running total: "
+                    f"{total_inserted:,} inserted, "
+                    f"{total_skipped:,} skipped"
+                )
+
+                print()
+
     print("Ingest complete.")
+    print(f"Total inserted: {total_inserted:,}")
+    print(f"Total skipped:  {total_skipped:,}")
 
 
 if __name__ == "__main__":
